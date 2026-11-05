@@ -15,5 +15,13 @@ database_name = "bot-crawler-b8"
 # D1 database bot-crawler-b8
 database_id = "00b46158-5600-4057-a64c-b45367eb4e2c"
 
+[vars]
+# Threshold field arm: how the block page is sent.
+#   "real"   -> HTTP 403 (many agent harnesses then drop the page body, so the notice never reaches the model)
+#   "static" -> HTTP 200, as on the pilot's static host (the body, notice included, reaches the agent)
+# Switching is a commit, so each mode change is timestamped in history; the log's
+# blocked_route rows also record the status actually sent (403 or 200).
+THRESHOLD_STATUS_MODE = "static"
+
 [observability]
 enabled = true
