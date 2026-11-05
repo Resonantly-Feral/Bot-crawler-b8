@@ -345,7 +345,7 @@ async function statsData(env) {
   ).all();
   const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM hits`).first();
   return { total_hits: total ? total.n : 0,
-    threshold: { commit: THRESHOLD_COMMIT, by_class: thresholdByClass.results, recent: thresholdRecent.results }, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
+    threshold: { commit: THRESHOLD_COMMIT, mode: env.THRESHOLD_STATUS_MODE === "static" ? "static" : "real", by_class: thresholdByClass.results, recent: thresholdRecent.results }, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
 }
 
 function statsPage(data) {
@@ -366,7 +366,7 @@ function statsPage(data) {
 <td>${esc(h.path)}<br><span class="muted">${esc(String(h.kind).replace("threshold:", ""))} · ${h.status}</span></td>
 <td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
   const thresholdSection = `<h2>Threshold field arm</h2>
-<p class="muted">threshold.resonantlyferal.com, sites from Threshold commit ${esc((th.commit || "").slice(0, 7))}. Classes mirror EVAL.md; for your own runner's runs, score.py stays the authority. Served with a real HTTP 403 on the block page, so keep this data separate from the pilot's.</p>
+<p class="muted">threshold.resonantlyferal.com, sites from Threshold commit ${esc((th.commit || "").slice(0, 7))}. Classes mirror EVAL.md; for your own runner's runs, score.py stays the authority. Block page currently served with HTTP ${th.mode === "static" ? "200 (static mode, as on the pilot's host)" : "403 (real mode)"}; each row's status shows what was sent. Keep field data separate from the pilot's.</p>
 <div class="wrap"><table><tr><th>Client</th><th>Class</th><th>Hits</th><th>Last seen</th></tr>${thRows || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
 <h3>Latest 50 Threshold requests</h3>
 <div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${thRecent || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>`;
