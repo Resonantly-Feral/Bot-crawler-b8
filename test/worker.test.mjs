@@ -14,6 +14,7 @@ function fakeDB() {
         bind(...args) { this.args = args; return this; },
         async run() { if (/^\s*INSERT/i.test(sql)) inserts.push(this.args); return {}; },
         async all() { return { results: [] }; },
+        async first() { return { n: 0 }; },
       };
     },
     async batch(stmts) { return stmts.map(() => ({})); },
@@ -136,6 +137,29 @@ test("decoy .env says it is a decoy, is logged, and only carries canary keys fro
 test("robots.txt disallows the decoy so polite crawlers never collect it", async () => {
   const { body } = await hit("/robots.txt", "x");
   assert.match(body, /Disallow: \/\.env/);
+});
+
+test("CSV export needs the key, escapes cells, defuses formulas, and is never logged", async () => {
+  const rows = [
+    { id: 1, ts: "2026-11-05T12:00:00Z", path: "/maze/3", kind: "maze", depth: 3, status: 200, bot: "ClaudeBot", ua: 'Mozilla "quoted", comma' },
+    { id: 2, ts: "2026-11-05T12:01:00Z", path: "/x", kind: "other", status: 404, bot: "none", ua: "=HYPERLINK(1)" },
+  ];
+  const db = fakeDB();
+  db.prepare = (sql) => ({ bind() { return this; }, async run() { return {}; }, async all() { return { results: /FROM hits WHERE id >/.test(sql) ? rows : [] }; }, async first() { return { n: 2 }; } });
+  db.batch = async () => [];
+  const env = { DB: db, STATS_KEY: "s3cret" };
+  assert.equal((await hit("/stats.csv", "x", env)).res.status, 404);
+  const ok = await hit("/stats.csv?key=s3cret", "x", env);
+  assert.equal(ok.res.status, 200);
+  assert.match(ok.res.headers.get("content-type"), /text\/csv/);
+  const lines = ok.body.trim().split("\r\n");
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /^id,ts,host,path/);
+  assert.match(lines[1], /"Mozilla ""quoted"", comma"/);
+  assert.match(lines[2], /'=HYPERLINK\(1\)/);
+  const page = await hit("/stats?key=s3cret", "x", env);
+  assert.match(page.body, /2<\/strong> requests logged/);
+  assert.match(page.body, /href="\/stats\.csv\?key=s3cret"/);
 });
 
 test("site still serves if the database binding is missing", async () => {

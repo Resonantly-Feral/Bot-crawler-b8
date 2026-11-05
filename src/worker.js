@@ -283,6 +283,29 @@ function keyOk(env, url) {
   return diff === 0;
 }
 
+const CSV_COLUMNS = ["id", "ts", "host", "path", "kind", "depth", "status", "bot", "operator", "ua", "asn", "as_org", "country", "verified"];
+const CSV_PAGE = 20000;
+
+function csvCell(v) {
+  if (v === null || v === undefined) return "";
+  let s = String(v);
+  // Stop spreadsheet apps treating logged text (user-agents, paths) as formulas.
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+// Full log as CSV, oldest first, CSV_PAGE rows per file. ?after=<id> continues from a row id.
+export async function csvExport(env, after) {
+  await ensureSchema(env.DB);
+  const { results } = await env.DB.prepare(
+    `SELECT ${CSV_COLUMNS.join(", ")} FROM hits WHERE id > ? ORDER BY id ASC LIMIT ?`
+  ).bind(after, CSV_PAGE).all();
+  const lines = [CSV_COLUMNS.join(",")];
+  for (const row of results) lines.push(CSV_COLUMNS.map((c) => csvCell(row[c])).join(","));
+  const last = results.length ? results[results.length - 1].id : after;
+  return { csv: lines.join("\r\n") + "\r\n", rows: results.length, last, more: results.length === CSV_PAGE };
+}
+
 async function statsData(env) {
   await ensureSchema(env.DB);
   const perBot = await env.DB.prepare(
@@ -306,7 +329,8 @@ async function statsData(env) {
      FROM hits WHERE kind IN ('other', 'decoy-env', 'trap')
      GROUP BY path ORDER BY hits DESC LIMIT 30`
   ).all();
-  return { per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
+  const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM hits`).first();
+  return { total_hits: total ? total.n : 0, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
 }
 
 function statsPage(data) {
@@ -319,7 +343,9 @@ function statsPage(data) {
 <td>${esc(h.path)}</td><td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
   const probed = (data.probed_paths || []).map((p) => `<tr><td>${esc(p.path)}</td><td>${p.hits}</td><td>${p.clients}</td>
 <td>${esc((p.last_seen || "").slice(0, 16))}</td></tr>`).join("");
+  const total = data.total_hits ?? 0;
   return page("Stats", `<h1>Who came</h1>
+<p><strong>${total}</strong> requests logged in total. <a href="${esc(data.csv_link || "")}">Download the full log (CSV)</a></p>
 <p class="muted">Times are UTC. "Max depth" is the deepest maze room reached; "Trap" counts requests to the disallowed archive. Bot names come from the user-agent, which can be faked: check the network column.</p>
 <div class="wrap"><table><tr><th>Client</th><th>Hits</th><th>Max depth</th><th>Trap</th><th>Paths</th><th>First / last seen</th></tr>${rows || '<tr><td colspan="6">Nothing yet.</td></tr>'}</table></div>
 <h2>Decoy .env downloads</h2>
@@ -338,7 +364,7 @@ export function route(pathname) {
   if (pathname === "/" || pathname === "/index.html") return { kind: "home" };
   if (pathname === "/robots.txt") return { kind: "robots" };
   if (pathname === "/sitemap.xml") return { kind: "sitemap" };
-  if (/^\/stats(\.json)?\/?$/.test(pathname)) return { kind: "stats" };
+  if (/^\/stats(\.json|\.csv)?\/?$/.test(pathname)) return { kind: "stats" };
   if (pathname === "/no-entry" || pathname.startsWith(TRAP)) return { kind: "trap" };
   let m = pathname.match(/^\/notes\/(\d+)\/?$/);
   if (m && +m[1] >= 1 && +m[1] <= NOTE_COUNT) return { kind: "note", n: +m[1] };
@@ -381,7 +407,19 @@ export default {
       }
       // Only someone holding the key sees this, so it can say what's wrong.
       if (!env.DB) return new Response("Stats key accepted, but the D1 database isn't connected to this Worker.", { status: 500 });
+      if (url.pathname.replace(/\/$/, "").endsWith(".csv")) {
+        const after = Math.max(0, parseInt(url.searchParams.get("after") || "0", 10) || 0);
+        const out = await csvExport(env, after);
+        const headers = {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="resonantlyferal-hits-${after + 1}-${out.last}.csv"`,
+          "cache-control": "no-store",
+        };
+        if (out.more) headers["x-next-page"] = `/stats.csv?key=<your key>&after=${out.last}`;
+        return new Response(out.csv, { headers });
+      }
       const data = await statsData(env);
+      data.csv_link = `/stats.csv?key=${encodeURIComponent(url.searchParams.get("key") || "")}`;
       if (url.pathname.endsWith(".json")) {
         return new Response(JSON.stringify(data, null, 2), { headers: { "content-type": "application/json" } });
       }
