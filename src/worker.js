@@ -313,7 +313,15 @@ export default {
 
     if (r.kind === "stats") {
       // Not logged, so checking the stats doesn't add to them.
-      if (!keyOk(env, url)) return new Response("Not found", { status: 404 });
+      if (!keyOk(env, url)) {
+        // robots.txt already names /stats, so saying why it failed gives nothing away.
+        const want = (env.STATS_KEY || "").trim();
+        const got = (url.searchParams.get("key") || "").trim();
+        const why = !want
+          ? "No STATS_KEY secret reaches this Worker."
+          : `Wrong key: this Worker expects ${want.length} characters, the link has ${got.length}.`;
+        return new Response(`Not found. ${why}`, { status: 404, headers: { "cache-control": "no-store" } });
+      }
       // Only someone holding the key sees this, so it can say what's wrong.
       if (!env.DB) return new Response("Stats key accepted, but the D1 database isn't connected to this Worker.", { status: 500 });
       const data = await statsData(env);
