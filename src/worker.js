@@ -15,6 +15,8 @@ const HOST = "resonantlyferal.com";
 const NOTE_COUNT = 60;
 const MAZE_DEPTH = 50;
 const TRAP = "/no-entry/";
+// Paths scanners request hoping to find a leaked settings file.
+const DECOY_PATHS = ["/.env", "/.env.local", "/.env.production", "/.env.bak", "/.env.backup"];
 
 // First match wins, so specific names come before the generic catch-all.
 const BOTS = [
@@ -209,8 +211,42 @@ function trapPage() {
 <p>This path is disallowed for all automated clients in this site's robots.txt. Requests here are recorded.</p>`);
 }
 
+// ---------- decoy settings file ----------
+
+// Served at the DECOY_PATHS to log who downloads leaked-looking credentials.
+// It says plainly that it is a decoy. If canary keys are set as Worker secrets
+// (CANARY_AWS_ACCESS_KEY_ID / CANARY_AWS_SECRET_ACCESS_KEY, e.g. from Canarytokens),
+// they are included so any attempt to use them alerts the owner. They are kept
+// out of the repo on purpose: keys published on GitHub get scraped from there,
+// which would pollute the signal.
+export function decoyEnv(env) {
+  const lines = [
+    "# resonantlyferal.com: research decoy.",
+    "# This file is served on purpose to record automated scanners.",
+    "# Nothing in it grants access to anything belonging to this site.",
+    "APP_NAME=fieldnotes",
+    "APP_ENV=production",
+    "APP_DEBUG=false",
+    "DB_CONNECTION=mysql",
+    "DB_HOST=127.0.0.1",
+    "DB_PORT=3306",
+    "DB_DATABASE=fieldnotes",
+    "DB_USERNAME=decoy",
+    "DB_PASSWORD=decoy-not-a-real-password",
+  ];
+  if (env.CANARY_AWS_ACCESS_KEY_ID && env.CANARY_AWS_SECRET_ACCESS_KEY) {
+    lines.push(
+      `AWS_ACCESS_KEY_ID=${env.CANARY_AWS_ACCESS_KEY_ID.trim()}`,
+      `AWS_SECRET_ACCESS_KEY=${env.CANARY_AWS_SECRET_ACCESS_KEY.trim()}`,
+      "AWS_DEFAULT_REGION=us-east-1"
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
 function robotsTxt() {
-  const rules = `Allow: /\nDisallow: ${TRAP}\nDisallow: /stats\n`;
+  // /.env is disallowed so polite crawlers never collect the decoy; scanners ignore robots.txt anyway.
+  const rules = `Allow: /\nDisallow: ${TRAP}\nDisallow: /stats\nDisallow: /.env\n`;
   return `# Claude's crawlers are explicitly welcome here.
 User-agent: ClaudeBot
 ${rules}
@@ -261,7 +297,16 @@ async function statsData(env) {
     `SELECT ts, bot, path, kind, depth, status, asn, as_org, country, verified, ua
      FROM hits WHERE bot != 'none' ORDER BY id DESC LIMIT 50`
   ).all();
-  return { per_bot: perBot.results, recent_bot_hits: recent.results };
+  const decoy = await env.DB.prepare(
+    `SELECT ts, bot, path, asn, as_org, country, ua
+     FROM hits WHERE kind = 'decoy-env' ORDER BY id DESC LIMIT 50`
+  ).all();
+  const paths = await env.DB.prepare(
+    `SELECT path, COUNT(*) AS hits, COUNT(DISTINCT bot) AS clients, MAX(ts) AS last_seen
+     FROM hits WHERE kind IN ('other', 'decoy-env', 'trap')
+     GROUP BY path ORDER BY hits DESC LIMIT 30`
+  ).all();
+  return { per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
 }
 
 function statsPage(data) {
@@ -270,9 +315,19 @@ function statsPage(data) {
 <td>${esc((b.first_seen || "").slice(0, 16))}<br>${esc((b.last_seen || "").slice(0, 16))}</td></tr>`).join("");
   const recent = data.recent_bot_hits.map((h) => `<tr><td>${esc(h.ts.slice(0, 19))}</td><td>${esc(h.bot)}</td>
 <td>${esc(h.path)}</td><td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
+  const decoy = (data.decoy_downloads || []).map((h) => `<tr><td>${esc(h.ts.slice(0, 19))}</td><td>${esc(h.bot)}</td>
+<td>${esc(h.path)}</td><td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
+  const probed = (data.probed_paths || []).map((p) => `<tr><td>${esc(p.path)}</td><td>${p.hits}</td><td>${p.clients}</td>
+<td>${esc((p.last_seen || "").slice(0, 16))}</td></tr>`).join("");
   return page("Stats", `<h1>Who came</h1>
 <p class="muted">Times are UTC. "Max depth" is the deepest maze room reached; "Trap" counts requests to the disallowed archive. Bot names come from the user-agent, which can be faked: check the network column.</p>
 <div class="wrap"><table><tr><th>Client</th><th>Hits</th><th>Max depth</th><th>Trap</th><th>Paths</th><th>First / last seen</th></tr>${rows || '<tr><td colspan="6">Nothing yet.</td></tr>'}</table></div>
+<h2>Decoy .env downloads</h2>
+<p class="muted">Every request for the fake settings file, whatever name the client gives.</p>
+<div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${decoy || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
+<h2>Probed paths</h2>
+<p class="muted">Addresses that aren't pages on this site (plus the trap and decoy), from every client including browser-named ones. Mostly scanners guessing.</p>
+<div class="wrap"><table><tr><th>Path</th><th>Hits</th><th>Clients</th><th>Last seen</th></tr>${probed || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
 <h2>Latest 50 bot requests</h2>
 <div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${recent || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>`);
 }
@@ -289,18 +344,20 @@ export function route(pathname) {
   if (m && +m[1] >= 1 && +m[1] <= NOTE_COUNT) return { kind: "note", n: +m[1] };
   m = pathname.match(/^\/maze\/(\d+)\/?$/);
   if (m && +m[1] >= 1 && +m[1] <= MAZE_DEPTH) return { kind: "maze", depth: +m[1] };
+  if (DECOY_PATHS.includes(pathname)) return { kind: "decoy-env" };
   return { kind: "other" };
 }
 
 const HTML = { "content-type": "text/html; charset=utf-8" };
 
-function respond(r, url) {
+function respond(r, url, env = {}) {
   switch (r.kind) {
     case "home": return new Response(homePage(), { headers: HTML });
     case "note": return new Response(notePage(r.n), { headers: HTML });
     case "maze": return new Response(mazePage(r.depth), { headers: HTML });
     case "trap": return new Response(trapPage(), { headers: HTML });
     case "robots": return new Response(robotsTxt(), { headers: { "content-type": "text/plain; charset=utf-8" } });
+    case "decoy-env": return new Response(decoyEnv(env), { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
     case "sitemap": return new Response(sitemapXml(url.origin), { headers: { "content-type": "application/xml; charset=utf-8" } });
     default: return new Response(page("Not found", "<h1>Not found</h1>"), { status: 404, headers: HTML });
   }
@@ -331,7 +388,7 @@ export default {
       return new Response(statsPage(data), { headers: { ...HTML, "cache-control": "no-store" } });
     }
 
-    const res = respond(r, url);
+    const res = respond(r, url, env);
     ctx.waitUntil(logHit(env, request, url, r, res.status).catch((e) => console.error("log failed", e)));
     return res;
   },

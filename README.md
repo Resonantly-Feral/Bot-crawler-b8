@@ -12,6 +12,7 @@ It runs as one Cloudflare Worker with a small D1 database for the log. No GitHub
 | `/notes/1` … `/notes/60` | Generated bait pages. Each carries a unique canary token (`rf-` + 10 hex characters) | Crawl breadth; canaries can be searched for in model output later |
 | `/maze/1` … `/maze/50` | The long hallway: each room links only to the next | Maximum depth each client follows |
 | `/no-entry/` | Trap. Disallowed for every client in robots.txt, linked visibly in every footer | Which clients ignore robots.txt |
+| `/.env` (and `.env.local`, `.env.production`, `.env.bak`, `.env.backup`) | Decoy settings file. Says in its first line that it is a research decoy; holds no real credentials. Disallowed in robots.txt so polite crawlers never collect it | Which scanners download leaked-looking credentials |
 | `/robots.txt` | Explicitly allows ClaudeBot, Claude-User and Claude-SearchBot; disallows the trap for everyone | |
 | `/sitemap.xml` | Home, all notes, and `/maze/1` only | Deeper rooms must be reached by following links, so depth measures link-following, not sitemap reading |
 | `/stats?key=…` | Private stats page (`/stats.json` for raw numbers). Never logged | |
@@ -38,6 +39,15 @@ After that, every commit to `main` redeploys.
 ## Getting found
 
 Bots find sites by following links from pages they already crawl. Link `https://resonantlyferal.com` from places that get crawled often: this repo's description, your GitHub profile, a LinkedIn post. A new site can sit quiet for days or weeks before a given bot arrives; that wait is part of what the log shows.
+
+## Optional: canary keys in the decoy
+
+To learn whether anyone tries to *use* the decoy, add fake cloud keys that report back when used:
+
+1. Make an AWS API key token at canarytokens.org (free; alerts go to the email you give it).
+2. Worker → Settings → Variables and Secrets (the runtime one, not Build) → add two **secrets**: `CANARY_AWS_ACCESS_KEY_ID` and `CANARY_AWS_SECRET_ACCESS_KEY`.
+
+They appear in `/.env` only while those secrets exist. Never commit them: keys published on GitHub get scraped from GitHub itself, which would muddy what the alert means.
 
 ## Tests
 

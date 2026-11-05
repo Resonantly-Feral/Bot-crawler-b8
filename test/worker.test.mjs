@@ -122,6 +122,22 @@ test("stats key tolerates stray whitespace and a trailing slash; missing DB is r
   assert.match(noDb.body, /database/);
 });
 
+test("decoy .env says it is a decoy, is logged, and only carries canary keys from secrets", async () => {
+  const plain = await hit("/.env", "");
+  assert.equal(plain.res.status, 200);
+  assert.match(plain.body, /^# resonantlyferal\.com: research decoy\./);
+  assert.doesNotMatch(plain.body, /AWS_ACCESS_KEY_ID/);
+  assert.equal(plain.env.DB.inserts[0][3], "decoy-env");
+  const withCanary = await hit("/.env.production", "x", { DB: fakeDB(), CANARY_AWS_ACCESS_KEY_ID: "AKIAEXAMPLE ", CANARY_AWS_SECRET_ACCESS_KEY: "secretexample" });
+  assert.match(withCanary.body, /AWS_ACCESS_KEY_ID=AKIAEXAMPLE\n/);
+  assert.match(withCanary.body, /AWS_SECRET_ACCESS_KEY=secretexample\n/);
+});
+
+test("robots.txt disallows the decoy so polite crawlers never collect it", async () => {
+  const { body } = await hit("/robots.txt", "x");
+  assert.match(body, /Disallow: \/\.env/);
+});
+
 test("site still serves if the database binding is missing", async () => {
   const { res } = await hit("/", "x", {});
   assert.equal(res.status, 200);
