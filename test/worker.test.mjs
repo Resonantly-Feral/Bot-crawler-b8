@@ -115,6 +115,13 @@ test("stats need the key and are never logged", async () => {
   assert.equal(noKeySet.res.status, 404);
 });
 
+test("stats key tolerates stray whitespace and a trailing slash; missing DB is reported to key holders", async () => {
+  assert.equal((await hit("/stats/?key=s3cret", "x", { DB: fakeDB(), STATS_KEY: " s3cret\n" })).res.status, 200);
+  const noDb = await hit("/stats?key=s3cret", "x", { STATS_KEY: "s3cret" });
+  assert.equal(noDb.res.status, 500);
+  assert.match(noDb.body, /database/);
+});
+
 test("site still serves if the database binding is missing", async () => {
   const { res } = await hit("/", "x", {});
   assert.equal(res.status, 200);

@@ -238,8 +238,9 @@ ${urls.map((u) => `<url><loc>${u}</loc></url>`).join("\n")}
 // ---------- stats ----------
 
 function keyOk(env, url) {
-  const want = env.STATS_KEY;
-  const got = url.searchParams.get("key") || "";
+  // Trim both sides: a pasted secret often carries a stray space or newline.
+  const want = (env.STATS_KEY || "").trim();
+  const got = (url.searchParams.get("key") || "").trim();
   if (!want || got.length !== want.length) return false;
   let diff = 0;
   for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ got.charCodeAt(i);
@@ -282,7 +283,7 @@ export function route(pathname) {
   if (pathname === "/" || pathname === "/index.html") return { kind: "home" };
   if (pathname === "/robots.txt") return { kind: "robots" };
   if (pathname === "/sitemap.xml") return { kind: "sitemap" };
-  if (pathname === "/stats" || pathname === "/stats.json") return { kind: "stats" };
+  if (/^\/stats(\.json)?\/?$/.test(pathname)) return { kind: "stats" };
   if (pathname === "/no-entry" || pathname.startsWith(TRAP)) return { kind: "trap" };
   let m = pathname.match(/^\/notes\/(\d+)\/?$/);
   if (m && +m[1] >= 1 && +m[1] <= NOTE_COUNT) return { kind: "note", n: +m[1] };
@@ -312,7 +313,9 @@ export default {
 
     if (r.kind === "stats") {
       // Not logged, so checking the stats doesn't add to them.
-      if (!keyOk(env, url) || !env.DB) return new Response("Not found", { status: 404 });
+      if (!keyOk(env, url)) return new Response("Not found", { status: 404 });
+      // Only someone holding the key sees this, so it can say what's wrong.
+      if (!env.DB) return new Response("Stats key accepted, but the D1 database isn't connected to this Worker.", { status: 500 });
       const data = await statsData(env);
       if (url.pathname.endsWith(".json")) {
         return new Response(JSON.stringify(data, null, 2), { headers: { "content-type": "application/json" } });
