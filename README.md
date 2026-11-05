@@ -29,10 +29,9 @@ Per request: time (UTC), host, path, page kind, maze depth, status, bot name and
 ## Setup (Cloudflare dashboard, works from a laptop browser)
 
 1. **Let AI crawlers in.** Domain `resonantlyferal.com` → AI Crawl Control (or Security → Bots): set AI crawlers to allowed and turn off any Cloudflare-managed robots.txt, so this Worker's robots.txt is the one bots read.
-2. **Create the database.** Storage & databases → D1 → Create → name it `bot-crawler-b8`. Copy its Database ID.
-3. **Paste the ID.** In this repo on GitHub, edit `wrangler.toml` and replace `PASTE_YOUR_D1_DATABASE_ID_HERE` with it. Commit.
-4. **Deploy from GitHub.** Workers & Pages → Create → Import a repository → pick `Resonantly-Feral/Bot-crawler-b8`. Deploy. The `routes` entry attaches it to `resonantlyferal.com` and creates the DNS record. The log table creates itself on the first request.
-5. **Set the stats key.** Worker → Settings → Variables and secrets → add a **secret** named `STATS_KEY` with a long random value. Then open `https://resonantlyferal.com/stats?key=<that value>`.
+2. **Create the database.** Done: `bot-crawler-b8`, ID already in `wrangler.toml`.
+3. **Deploy from GitHub.** Workers & Pages → Create → Import a repository → pick `Resonantly-Feral/Bot-crawler-b8`. Deploy. The `routes` entry attaches it to `resonantlyferal.com` and creates the DNS record. The log table creates itself on the first request.
+4. **Set the stats key.** Worker → Settings → Variables and secrets → add a **secret** named `STATS_KEY` with a long random value. Then open `https://resonantlyferal.com/stats?key=<that value>`.
 
 After that, every commit to `main` redeploys.
 
