@@ -10,6 +10,10 @@
 //   /stats?key=...    private stats page (needs the STATS_KEY secret); /stats.json for raw numbers
 //
 // Every request except /stats is logged to D1. No IP addresses are stored.
+// Requests to threshold.resonantlyferal.com are handed to src/threshold.js.
+
+import { thresholdResponse } from "./threshold.js";
+import { THRESHOLD_COMMIT } from "./threshold-sites.js";
 
 const HOST = "resonantlyferal.com";
 const NOTE_COUNT = 60;
@@ -41,6 +45,7 @@ const BOTS = [
   ["PetalBot", /PetalBot/i, "Huawei"],
   ["YandexBot", /YandexBot/i, "Yandex"],
   ["MistralAI-User", /MistralAI-User/i, "Mistral"],
+  ["abn-pilot", /abn-pilot/i, "Threshold runner"],
   ["other-bot", /bot|crawl|spider|scrape|fetch|python|curl|wget|headless|httpclient|go-http|java\//i, "unknown"],
 ];
 
@@ -314,11 +319,11 @@ async function statsData(env) {
             MAX(CASE WHEN kind = 'maze' THEN depth END) AS max_depth,
             COUNT(DISTINCT path) AS distinct_paths,
             MIN(ts) AS first_seen, MAX(ts) AS last_seen
-     FROM hits GROUP BY bot, operator ORDER BY hits DESC`
+     FROM hits WHERE (host IS NULL OR host NOT LIKE 'threshold.%') GROUP BY bot, operator ORDER BY hits DESC`
   ).all();
   const recent = await env.DB.prepare(
     `SELECT ts, bot, path, kind, depth, status, asn, as_org, country, verified, ua
-     FROM hits WHERE bot != 'none' ORDER BY id DESC LIMIT 50`
+     FROM hits WHERE bot != 'none' AND (host IS NULL OR host NOT LIKE 'threshold.%') ORDER BY id DESC LIMIT 50`
   ).all();
   const decoy = await env.DB.prepare(
     `SELECT ts, bot, path, asn, as_org, country, ua
@@ -329,8 +334,18 @@ async function statsData(env) {
      FROM hits WHERE kind IN ('other', 'decoy-env', 'trap')
      GROUP BY path ORDER BY hits DESC LIMIT 30`
   ).all();
+  const thresholdByClass = await env.DB.prepare(
+    `SELECT bot, operator, kind, COUNT(*) AS hits, MAX(ts) AS last_seen
+     FROM hits WHERE host LIKE 'threshold.%'
+     GROUP BY bot, operator, kind ORDER BY bot, kind`
+  ).all();
+  const thresholdRecent = await env.DB.prepare(
+    `SELECT ts, bot, path, kind, status, asn, as_org
+     FROM hits WHERE host LIKE 'threshold.%' ORDER BY id DESC LIMIT 50`
+  ).all();
   const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM hits`).first();
-  return { total_hits: total ? total.n : 0, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
+  return { total_hits: total ? total.n : 0,
+    threshold: { commit: THRESHOLD_COMMIT, by_class: thresholdByClass.results, recent: thresholdRecent.results }, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
 }
 
 function statsPage(data) {
@@ -344,6 +359,17 @@ function statsPage(data) {
   const probed = (data.probed_paths || []).map((p) => `<tr><td>${esc(p.path)}</td><td>${p.hits}</td><td>${p.clients}</td>
 <td>${esc((p.last_seen || "").slice(0, 16))}</td></tr>`).join("");
   const total = data.total_hits ?? 0;
+  const th = data.threshold || { by_class: [], recent: [] };
+  const thRows = th.by_class.map((c) => `<tr><td>${esc(c.bot)}<br><span class="muted">${esc(c.operator)}</span></td>
+<td>${esc(String(c.kind).replace("threshold:", ""))}</td><td>${c.hits}</td><td>${esc((c.last_seen || "").slice(0, 16))}</td></tr>`).join("");
+  const thRecent = th.recent.map((h) => `<tr><td>${esc(h.ts.slice(0, 19))}</td><td>${esc(h.bot)}</td>
+<td>${esc(h.path)}<br><span class="muted">${esc(String(h.kind).replace("threshold:", ""))} · ${h.status}</span></td>
+<td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
+  const thresholdSection = `<h2>Threshold field arm</h2>
+<p class="muted">threshold.resonantlyferal.com, sites from Threshold commit ${esc((th.commit || "").slice(0, 7))}. Classes mirror EVAL.md; for your own runner's runs, score.py stays the authority. Served with a real HTTP 403 on the block page, so keep this data separate from the pilot's.</p>
+<div class="wrap"><table><tr><th>Client</th><th>Class</th><th>Hits</th><th>Last seen</th></tr>${thRows || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
+<h3>Latest 50 Threshold requests</h3>
+<div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${thRecent || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>`;
   return page("Stats", `<h1>Who came</h1>
 <p><strong>${total}</strong> requests logged in total. <a href="${esc(data.csv_link || "")}">Download the full log (CSV)</a></p>
 <p class="muted">Times are UTC. "Max depth" is the deepest maze room reached; "Trap" counts requests to the disallowed archive. Bot names come from the user-agent, which can be faked: check the network column.</p>
@@ -355,7 +381,9 @@ function statsPage(data) {
 <p class="muted">Addresses that aren't pages on this site (plus the trap and decoy), from every client including browser-named ones. Mostly scanners guessing.</p>
 <div class="wrap"><table><tr><th>Path</th><th>Hits</th><th>Clients</th><th>Last seen</th></tr>${probed || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
 <h2>Latest 50 bot requests</h2>
-<div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${recent || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>`);
+<p class="muted">Main site only. Threshold traffic is in its own section below.</p>
+<div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${recent || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
+${thresholdSection}`);
 }
 
 // ---------- router ----------
@@ -392,6 +420,13 @@ function respond(r, url, env = {}) {
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (url.hostname.startsWith("threshold.")) {
+      const t = thresholdResponse(url, env);
+      ctx.waitUntil(logHit(env, request, url, t.r, t.res.status).catch((e) => console.error("log failed", e)));
+      return t.res;
+    }
+
     const r = route(url.pathname);
 
     if (r.kind === "stats") {

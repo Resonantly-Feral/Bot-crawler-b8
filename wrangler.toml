@@ -4,7 +4,9 @@ compatibility_date = "2025-09-01"
 
 # Serves the Worker on the bare domain. Cloudflare creates the DNS record itself on deploy.
 routes = [
-  { pattern = "resonantlyferal.com", custom_domain = true }
+  { pattern = "resonantlyferal.com", custom_domain = true },
+  # Threshold field arm. Not linked from the main site.
+  { pattern = "threshold.resonantlyferal.com", custom_domain = true }
 ]
 
 [[d1_databases]]

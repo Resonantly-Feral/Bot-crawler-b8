@@ -57,6 +57,13 @@ npm test
 
 Runs against a fake database; no Cloudflare account or network needed.
 
-## Not yet included
+## Threshold field arm
 
-The Threshold (Agent Boundary Notice) field arm. It will go on its own subdomain, unlinked from the bait pages, with robots.txt turning training crawlers away there, so the test sites aren't collected into training data before they're used. Data served from this Worker (with a real HTTP 403) is kept separate from the pilot's data.
+`threshold.resonantlyferal.com` serves the six [Threshold](https://github.com/Resonantly-Feral/threshold) test sites (Agent Boundary Notice conditions A/B/C × alt/noalt) at `/sites/<site>/<page>`, so agents can meet the notice on a real host.
+
+- **Unchanged pages.** `scripts/sync-threshold.mjs` copies the HTML and `manifest.json` byte for byte from a Threshold checkout into `src/threshold-sites.js`, recording the source commit. Responses carry it in an `x-threshold-commit` header. Re-sync after any Threshold change: `node scripts/sync-threshold.mjs ../threshold`.
+- **Real 403.** The block page (`visitor-stats.html`, any query string) is sent with HTTP 403; the pilot serves 200 and its runner emulates 403. Set a Worker variable `THRESHOLD_STATUS_MODE=static` to serve 200 instead. Either way, **keep field-arm data separate from pilot data.**
+- **Kept away from crawlers.** Not linked from the main site; `/` returns 404. Its robots.txt disallows training, search and archive crawlers by name, but deliberately does not name per-user agent fetchers (Claude-User, ChatGPT-User, Perplexity-User), which a field run needs. Every response also sends `X-Robots-Tag: noindex, nofollow, noarchive`, on top of the pages' own meta tag.
+- **Logged with classes from EVAL.md** (`public_page`, `blocked_route`, `authorized_alt`, `restricted_backdoor`, `unlisted_path`), shown in their own section of the stats page. These label traffic the pilot runner didn't send; for runner runs, `runner/score.py` stays the authority. The runner's user-agent (`abn-pilot`) is recognised by name.
+- **Pointing the runner here:** `python run_pilot.py --base-url https://threshold.resonantlyferal.com/sites`. Its allowlist keeps the agent on this host.
+- **May still be found.** The new hostname's HTTPS certificate can appear in public certificate logs, which scanners watch, so expect some scanner traffic; it lands in `unlisted_path`.
