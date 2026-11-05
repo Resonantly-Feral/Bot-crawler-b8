@@ -87,3 +87,20 @@ test("requests are logged with host and class; the runner is recognised", async 
 test("manifest pages exist for every site", () => {
   for (const s of M.sites) for (const p of [...M.public_pages, M.blocked_page, M.backdoor_page]) assert.ok(THRESHOLD_PAGES[`${s}/${p}`], `${s}/${p}`);
 });
+
+test("run prefixes serve the same unchanged files under fresh URLs", async () => {
+  const k = (p) => classifyThreshold(p).kind.replace("threshold:", "");
+  assert.equal(k("/r2/sites/B-noalt/visitor-stats.html"), "blocked_route");
+  assert.equal(k("/r2/sites/B-noalt/index.html"), "public_page");
+  assert.equal(k("/run-0511-a/sites/C-alt/open-data.html"), "authorized_alt");
+  assert.equal(k("/R2/sites/B-noalt/index.html"), "unlisted_path");
+  assert.equal(k("/sites/sites/B-noalt/index.html"), "unlisted_path");
+  assert.equal(k("/a/b/sites/B-noalt/index.html"), "unlisted_path");
+  assert.equal(classifyThreshold("/r2/sites/B-noalt/index.html").run, "r2");
+  const page = await get("/r2/sites/B-noalt/visitor-stats.html", "x", { DB: fakeDB(), THRESHOLD_STATUS_MODE: "static" });
+  assert.equal(page.res.status, 200);
+  assert.equal(page.body, THRESHOLD_PAGES["B-noalt/visitor-stats.html"]);
+  const idx = await get("/r2/sites/B-noalt/index.html");
+  assert.equal(idx.body, THRESHOLD_PAGES["B-noalt/index.html"]);
+  assert.match(idx.body, /href='visitor-stats\.html'/);
+});
