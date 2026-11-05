@@ -1,0 +1,17 @@
+name = "bot-crawler-b8"
+main = "src/worker.js"
+compatibility_date = "2025-09-01"
+
+# Serves the Worker on the bare domain. Cloudflare creates the DNS record itself on deploy.
+routes = [
+  { pattern = "resonantlyferal.com", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bot-crawler-b8"
+# Paste the Database ID from Cloudflare dashboard → Storage & databases → D1 → bot-crawler-b8.
+database_id = "PASTE_YOUR_D1_DATABASE_ID_HERE"
+
+[observability]
+enabled = true
