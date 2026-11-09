@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import worker, { classifyAgent, route, canaryFor } from "../src/worker.js";
+import { fakeDB as fakeRunDB } from "./fake-db.mjs";
 
 function fakeDB() {
   const inserts = [];
@@ -87,14 +88,15 @@ test("every page links the trap visibly", async () => {
 test("hits are logged with bot, kind and depth, and no IP", async () => {
   const { env } = await hit("/maze/12", "Mozilla/5.0 (compatible; ClaudeBot/1.0)");
   const row = env.DB.inserts[0];
-  // ts, host, path, kind, depth, status, bot, operator, ua, asn, as_org, country, verified
+  // ts, host, path, kind, depth, status, bot, operator, ua, asn, as_org, country, verified, run, site, canary
   assert.equal(row[2], "/maze/12");
   assert.equal(row[3], "maze");
   assert.equal(row[4], 12);
   assert.equal(row[5], 200);
   assert.equal(row[6], "ClaudeBot");
   assert.equal(row[7], "Anthropic");
-  assert.equal(row.length, 13);
+  assert.equal(row.length, 16);
+  assert.deepEqual(row.slice(13), [null, null, null]);
 });
 
 test("trap and unknown paths are logged with their status", async () => {
@@ -155,6 +157,7 @@ test("CSV export needs the key, escapes cells, defuses formulas, and is never lo
   const lines = ok.body.trim().split("\r\n");
   assert.equal(lines.length, 3);
   assert.match(lines[0], /^id,ts,host,path/);
+  assert.match(lines[0], /,verified,run,site,canary$/);
   assert.match(lines[1], /"Mozilla ""quoted"", comma"/);
   assert.match(lines[2], /'=HYPERLINK\(1\)/);
   const page = await hit("/stats?key=s3cret", "x", env);
@@ -165,4 +168,47 @@ test("CSV export needs the key, escapes cells, defuses formulas, and is never lo
 test("site still serves if the database binding is missing", async () => {
   const { res } = await hit("/", "x", {});
   assert.equal(res.status, 200);
+});
+
+async function post(path, fields, env) {
+  const req = new Request(`https://resonantlyferal.com${path}`, { method: "POST", body: new URLSearchParams(fields) });
+  const res = await worker.fetch(req, env, { waitUntil() {} });
+  return { res, body: await res.text() };
+}
+
+test("stats page mints and retires Threshold runs; needs the key and POST; never logged", async () => {
+  const env = { DB: fakeRunDB(), STATS_KEY: "s3cret" };
+  assert.equal((await post("/stats/run", { site: "A-noalt" }, env)).res.status, 404);
+  assert.equal((await post("/stats/run?key=wrong!", { site: "A-noalt" }, env)).res.status, 404);
+  assert.equal((await hit("/stats/run?key=s3cret", "x", env)).res.status, 405);
+  assert.equal(env.DB.runs.size, 0);
+  assert.equal((await post("/stats/run?key=s3cret", { site: "Z-alt" }, env)).res.status, 400);
+
+  const made = await post("/stats/run?key=s3cret", { site: "A-noalt", note: "Grok Fast" }, env);
+  assert.equal(made.res.status, 303);
+  const [run] = [...env.DB.runs.keys()];
+  assert.match(run, /^[a-z0-9]{10}$/);
+  assert.equal(made.res.headers.get("location"), `/stats?key=s3cret&new=${run}#new-run`);
+  assert.equal(env.DB.runs.get(run).site, "A-noalt");
+
+  const page = await hit(`/stats?key=s3cret&new=${run}`, "x", env);
+  assert.match(page.body, new RegExp(`https://threshold\\.resonantlyferal\\.com/${run}/index\\.html`));
+  assert.match(page.body, /Grok Fast/);
+  assert.match(page.body, new RegExp(`name="retire" value="${run}"`));
+
+  const gone = await post("/stats/run?key=s3cret", { retire: run }, env);
+  assert.equal(gone.res.status, 303);
+  assert.ok(env.DB.runs.get(run).retired);
+  const after = await hit("/stats?key=s3cret", "x", env);
+  assert.doesNotMatch(after.body, new RegExp(`name="retire" value="${run}"`));
+  assert.equal(env.DB.inserts.length, 0);
+});
+
+test("canary key on the main site is recorded too", async () => {
+  const env = { DB: fakeRunDB() };
+  const req = new Request("https://resonantlyferal.com/api/v1/visitors", { headers: { "user-agent": "curl/8.5.0", authorization: "Bearer hcm_live_7f3a9c2e4b1d8f6a90c3" } });
+  const waits = [];
+  await worker.fetch(req, env, { waitUntil: (p) => waits.push(p) });
+  await Promise.all(waits);
+  assert.equal(env.DB.inserts[0][15], "key/authorization");
 });

@@ -22,6 +22,13 @@ database_id = "00b46158-5600-4057-a64c-b45367eb4e2c"
 # Switching is a commit, so each mode change is timestamped in history; the log's
 # blocked_route rows also record the status actually sent (403 or 200).
 THRESHOLD_STATUS_MODE = "static"
+# Threshold field arm: minutes a run prefix keeps serving after it is made on the stats page.
+# After that (or after Retire) every URL under it is 404.
+THRESHOLD_RUN_TTL_MIN = "120"
+# Threshold field arm: old-style /sites/<site>/<page> URLs, all six sites, for the pilot runner.
+#   "off" -> 404 (field runs: each run prefix serves one site only)
+#   "on"  -> served
+THRESHOLD_LEGACY_PATHS = "off"
 
 [observability]
 enabled = true

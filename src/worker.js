@@ -8,12 +8,14 @@
 //   /robots.txt       explicitly allows the Claude bots, disallows the trap for everyone
 //   /sitemap.xml      lists home, notes and /maze/1 only (deeper maze pages must be found by following links)
 //   /stats?key=...    private stats page (needs the STATS_KEY secret); /stats.json for raw numbers
+//   /stats/run?key=   POST only: mints or retires a Threshold run prefix (buttons on the stats page)
 //
 // Every request except /stats is logged to D1. No IP addresses are stored.
 // Requests to threshold.resonantlyferal.com are handed to src/threshold.js.
 
-import { thresholdResponse } from "./threshold.js";
-import { THRESHOLD_COMMIT } from "./threshold-sites.js";
+import { thresholdResponse, canaryUse, mintRun, retireRun, listRuns, runState, runTtlMinutes } from "./threshold.js";
+import { THRESHOLD_COMMIT, THRESHOLD_MANIFEST } from "./threshold-sites.js";
+import { ensureSchema } from "./schema.js";
 
 const HOST = "resonantlyferal.com";
 const NOTE_COUNT = 60;
@@ -57,24 +59,6 @@ export function classifyAgent(ua) {
 
 // ---------- logging ----------
 
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS hits (
-     id INTEGER PRIMARY KEY AUTOINCREMENT,
-     ts TEXT NOT NULL,
-     host TEXT, path TEXT, kind TEXT, depth INTEGER, status INTEGER,
-     bot TEXT, operator TEXT, ua TEXT,
-     asn INTEGER, as_org TEXT, country TEXT, verified TEXT)`,
-  `CREATE INDEX IF NOT EXISTS hits_bot ON hits(bot)`,
-  `CREATE INDEX IF NOT EXISTS hits_ts ON hits(ts)`,
-];
-let schemaReady = false;
-
-async function ensureSchema(db) {
-  if (schemaReady) return;
-  await db.batch(SCHEMA.map((s) => db.prepare(s)));
-  schemaReady = true;
-}
-
 async function logHit(env, request, url, route, status) {
   if (!env.DB) return;
   const ua = request.headers.get("user-agent") || "";
@@ -87,12 +71,16 @@ async function logHit(env, request, url, route, status) {
   const verified = vb === undefined ? null : vb ? "yes" : "no";
   await ensureSchema(env.DB);
   await env.DB.prepare(
-    `INSERT INTO hits (ts, host, path, kind, depth, status, bot, operator, ua, asn, as_org, country, verified)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO hits (ts, host, path, kind, depth, status, bot, operator, ua, asn, as_org, country, verified, run, site, canary)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     new Date().toISOString(), url.hostname, (url.pathname + url.search).slice(0, 500),
     route.kind, route.depth ?? null, status, bot, operator, ua.slice(0, 500),
-    cf.asn ?? null, cf.asOrganization ?? null, cf.country ?? null, verified
+    cf.asn ?? null, cf.asOrganization ?? null, cf.country ?? null, verified,
+    // Threshold only: the run prefix and the site it serves (the URL no longer names the site).
+    route.run ?? null, route.site ?? null,
+    // Whether the request carried the canary key or host from the developer notes, and where.
+    canaryUse(request, url)
   ).run();
 }
 
@@ -288,7 +276,7 @@ function keyOk(env, url) {
   return diff === 0;
 }
 
-const CSV_COLUMNS = ["id", "ts", "host", "path", "kind", "depth", "status", "bot", "operator", "ua", "asn", "as_org", "country", "verified"];
+const CSV_COLUMNS = ["id", "ts", "host", "path", "kind", "depth", "status", "bot", "operator", "ua", "asn", "as_org", "country", "verified", "run", "site", "canary"];
 const CSV_PAGE = 20000;
 
 function csvCell(v) {
@@ -340,12 +328,17 @@ async function statsData(env) {
      GROUP BY bot, operator, kind ORDER BY bot, kind`
   ).all();
   const thresholdRecent = await env.DB.prepare(
-    `SELECT ts, bot, path, kind, status, asn, as_org
+    `SELECT ts, bot, path, kind, status, asn, as_org, run, site, canary
      FROM hits WHERE host LIKE 'threshold.%' ORDER BY id DESC LIMIT 50`
   ).all();
+  const canary = await env.DB.prepare(
+    `SELECT ts, host, bot, path, run, site, canary, asn, as_org
+     FROM hits WHERE canary IS NOT NULL ORDER BY id DESC LIMIT 50`
+  ).all();
+  const runs = (await listRuns(env.DB, 30)).map((r) => ({ ...r, state: runState(r, env) }));
   const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM hits`).first();
   return { total_hits: total ? total.n : 0,
-    threshold: { commit: THRESHOLD_COMMIT, mode: env.THRESHOLD_STATUS_MODE === "static" ? "static" : "real", by_class: thresholdByClass.results, recent: thresholdRecent.results }, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
+    threshold: { commit: THRESHOLD_COMMIT, mode: env.THRESHOLD_STATUS_MODE === "static" ? "static" : "real", legacy_paths: env.THRESHOLD_LEGACY_PATHS === "on", run_ttl_min: runTtlMinutes(env), runs, canary_use: canary.results, by_class: thresholdByClass.results, recent: thresholdRecent.results }, per_bot: perBot.results, recent_bot_hits: recent.results, decoy_downloads: decoy.results, probed_paths: paths.results };
 }
 
 function statsPage(data) {
@@ -359,14 +352,31 @@ function statsPage(data) {
   const probed = (data.probed_paths || []).map((p) => `<tr><td>${esc(p.path)}</td><td>${p.hits}</td><td>${p.clients}</td>
 <td>${esc((p.last_seen || "").slice(0, 16))}</td></tr>`).join("");
   const total = data.total_hits ?? 0;
-  const th = data.threshold || { by_class: [], recent: [] };
+  const th = { by_class: [], recent: [], runs: [], canary_use: [], ...(data.threshold || {}) };
+  const runAction = esc(data.run_action || "");
+  const siteOptions = THRESHOLD_MANIFEST.sites.map((s) => `<option>${esc(s)}</option>`).join("");
+  const runRows = th.runs.map((r) => `<tr${r.run === data.new_run ? ' id="new-run"' : ""}><td><code>https://threshold.${HOST}/${esc(r.run)}/index.html</code>${r.note ? `<br><span class="muted">${esc(r.note)}</span>` : ""}</td>
+<td>${esc(r.site)}</td><td>${esc((r.created || "").slice(0, 16))}</td>
+<td>${r.state === "active" ? `<form method="post" action="${runAction}"><input type="hidden" name="retire" value="${esc(r.run)}"><button>Retire</button></form>` : esc(r.state)}</td></tr>`).join("");
+  const canaryRows = th.canary_use.map((h) => `<tr><td>${esc(h.ts.slice(0, 19))}</td><td>${esc(h.bot)}</td>
+<td>${esc(h.path)}<br><span class="muted">${esc(h.site || h.host)}</span></td><td>${esc(h.canary)}</td>
+<td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
   const thRows = th.by_class.map((c) => `<tr><td>${esc(c.bot)}<br><span class="muted">${esc(c.operator)}</span></td>
 <td>${esc(String(c.kind).replace("threshold:", ""))}</td><td>${c.hits}</td><td>${esc((c.last_seen || "").slice(0, 16))}</td></tr>`).join("");
   const thRecent = th.recent.map((h) => `<tr><td>${esc(h.ts.slice(0, 19))}</td><td>${esc(h.bot)}</td>
-<td>${esc(h.path)}<br><span class="muted">${esc(String(h.kind).replace("threshold:", ""))} · ${h.status}</span></td>
+<td>${esc(h.path)}<br><span class="muted">${h.site ? esc(h.site) + " · " : ""}${esc(String(h.kind).replace("threshold:", ""))} · ${h.status}${h.canary ? " · canary: " + esc(h.canary) : ""}</span></td>
 <td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
   const thresholdSection = `<h2>Threshold field arm</h2>
 <p class="muted">threshold.resonantlyferal.com, sites from Threshold commit ${esc((th.commit || "").slice(0, 7))}. Classes mirror EVAL.md; for your own runner's runs, score.py stays the authority. Block page currently served with HTTP ${th.mode === "static" ? "200 (static mode, as on the pilot's host)" : "403 (real mode)"}; each row's status shows what was sent. Keep field data separate from the pilot's.</p>
+<h3 id="runs">Runs</h3>
+<p class="muted">Each run is a new random prefix that serves one site only; the URL does not name the site. A run stops serving (404) when retired here, or ${th.run_ttl_min} minutes after it was made. Old-style /sites/ URLs are ${th.legacy_paths ? "open for the pilot runner (THRESHOLD_LEGACY_PATHS=on)" : "retired"}.</p>
+<form method="post" action="${runAction}"><select name="site">${siteOptions}</select>
+<input name="note" placeholder="agent and mode, e.g. Grok Fast" maxlength="120"> <button>New run</button></form>
+<div class="wrap"><table><tr><th>URL to give the agent</th><th>Site</th><th>Made</th><th>State</th></tr>${runRows || '<tr><td colspan="4">No runs yet.</td></tr>'}</table></div>
+<h3>Canary key use</h3>
+<p class="muted">Requests on either host that carried the developer-notes key or its host name, and where (URL or header name). Request bodies are not read, and requests sent to the canary host itself never arrive here.</p>
+<div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Where</th><th>Network</th></tr>${canaryRows || '<tr><td colspan="5">Nothing yet.</td></tr>'}</table></div>
+<h3>By class</h3>
 <div class="wrap"><table><tr><th>Client</th><th>Class</th><th>Hits</th><th>Last seen</th></tr>${thRows || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>
 <h3>Latest 50 Threshold requests</h3>
 <div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Network</th></tr>${thRecent || '<tr><td colspan="4">Nothing yet.</td></tr>'}</table></div>`;
@@ -392,7 +402,7 @@ export function route(pathname) {
   if (pathname === "/" || pathname === "/index.html") return { kind: "home" };
   if (pathname === "/robots.txt") return { kind: "robots" };
   if (pathname === "/sitemap.xml") return { kind: "sitemap" };
-  if (/^\/stats(\.json|\.csv)?\/?$/.test(pathname)) return { kind: "stats" };
+  if (/^\/stats(\.json|\.csv|\/run)?\/?$/.test(pathname)) return { kind: "stats" };
   if (pathname === "/no-entry" || pathname.startsWith(TRAP)) return { kind: "trap" };
   let m = pathname.match(/^\/notes\/(\d+)\/?$/);
   if (m && +m[1] >= 1 && +m[1] <= NOTE_COUNT) return { kind: "note", n: +m[1] };
@@ -422,7 +432,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.hostname.startsWith("threshold.")) {
-      const t = thresholdResponse(url, env);
+      const t = await thresholdResponse(url, env);
       ctx.waitUntil(logHit(env, request, url, t.r, t.res.status).catch((e) => console.error("log failed", e)));
       return t.res;
     }
@@ -442,6 +452,19 @@ export default {
       }
       // Only someone holding the key sees this, so it can say what's wrong.
       if (!env.DB) return new Response("Stats key accepted, but the D1 database isn't connected to this Worker.", { status: 500 });
+      const keyParam = encodeURIComponent(url.searchParams.get("key") || "");
+      if (url.pathname.replace(/\/$/, "") === "/stats/run") {
+        // Mint or retire a Threshold run. POST only, so opening or previewing a link changes nothing.
+        if (request.method !== "POST") return new Response("Use the buttons on the stats page.", { status: 405, headers: { allow: "POST" } });
+        const form = await request.formData();
+        const retire = String(form.get("retire") || "");
+        const site = String(form.get("site") || "");
+        let made = "";
+        if (retire) await retireRun(env.DB, retire);
+        else if (THRESHOLD_MANIFEST.sites.includes(site)) made = (await mintRun(env.DB, site, String(form.get("note") || ""))).run;
+        else return new Response("Unknown site.", { status: 400 });
+        return new Response(null, { status: 303, headers: { location: `/stats?key=${keyParam}${made ? `&new=${made}#new-run` : "#runs"}`, "cache-control": "no-store" } });
+      }
       if (url.pathname.replace(/\/$/, "").endsWith(".csv")) {
         const after = Math.max(0, parseInt(url.searchParams.get("after") || "0", 10) || 0);
         const out = await csvExport(env, after);
@@ -454,7 +477,9 @@ export default {
         return new Response(out.csv, { headers });
       }
       const data = await statsData(env);
-      data.csv_link = `/stats.csv?key=${encodeURIComponent(url.searchParams.get("key") || "")}`;
+      data.csv_link = `/stats.csv?key=${keyParam}`;
+      data.run_action = `/stats/run?key=${keyParam}`;
+      data.new_run = url.searchParams.get("new") || "";
       if (url.pathname.endsWith(".json")) {
         return new Response(JSON.stringify(data, null, 2), { headers: { "content-type": "application/json" } });
       }
