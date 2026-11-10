@@ -154,6 +154,11 @@ a{color:var(--link)} h1{font-size:1.5em;line-height:1.25} .muted{color:var(--mut
 footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);font-size:.85em;color:var(--muted)}
 ul{padding-left:1.2em} table{border-collapse:collapse;width:100%;font:14px/1.4 system-ui,sans-serif}
 td,th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left;vertical-align:top} .wrap{overflow-x:auto}
+.run{border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0;font:15px/1.4 system-ui,sans-serif}
+.run input.url{width:100%;box-sizing:border-box;font:14px/1.3 ui-monospace,monospace;padding:10px 8px;margin:8px 0;background:transparent;color:var(--fg);border:1px solid var(--line);border-radius:6px}
+.run .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center} .run form{margin:0}
+.runform{display:flex;gap:8px;flex-wrap:wrap} .runform select,.runform input{font:16px system-ui,sans-serif;padding:10px 8px;flex:1 1 140px;min-width:0;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px}
+button{font:16px system-ui,sans-serif;padding:10px 16px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--fg)} button.primary{background:var(--link);color:var(--bg);border-color:var(--link)}
 </style></head><body>
 <header><a href="/">resonantlyferal</a></header>
 ${body}
@@ -355,9 +360,34 @@ function statsPage(data) {
   const th = { by_class: [], recent: [], runs: [], canary_use: [], ...(data.threshold || {}) };
   const runAction = esc(data.run_action || "");
   const siteOptions = THRESHOLD_MANIFEST.sites.map((s) => `<option>${esc(s)}</option>`).join("");
-  const runRows = th.runs.map((r) => `<tr${r.run === data.new_run ? ' id="new-run"' : ""}><td><code>https://threshold.${HOST}/${esc(r.run)}/index.html</code>${r.note ? `<br><span class="muted">${esc(r.note)}</span>` : ""}</td>
-<td>${esc(r.site)}</td><td>${esc((r.created || "").slice(0, 16))}</td>
-<td>${r.state === "active" ? `<form method="post" action="${runAction}"><input type="hidden" name="retire" value="${esc(r.run)}"><button>Retire</button></form>` : esc(r.state)}</td></tr>`).join("");
+  // One card per run, stacked, so it reads on a phone without sideways scrolling. The URL sits
+  // alone in its own box with a Copy button, so the site name is never copied along with it.
+  const runRows = th.runs.map((r) => {
+    const runUrl = `https://threshold.${HOST}/${r.run}/index.html`;
+    const live = r.state === "active";
+    return `<div class="run"${r.run === data.new_run ? ' id="new-run"' : ""}>
+<div><strong>${esc(r.site)}</strong>${r.note ? ` · ${esc(r.note)}` : ""} <span class="muted">· made ${esc((r.created || "").slice(0, 16))} · ${esc(r.state)}</span></div>
+<input class="url" readonly value="${esc(runUrl)}" aria-label="Run URL" onfocus="this.select()">
+<div class="row">${live ? `<button type="button" class="primary" data-copy="${esc(runUrl)}">Copy URL</button>
+<form method="post" action="${runAction}"><input type="hidden" name="retire" value="${esc(r.run)}"><button>Retire</button></form>` : `<span class="muted">Stopped serving. This URL is now 404.</span>`}</div></div>`;
+  }).join("");
+  const copyScript = `<script>
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-copy]");
+  if (!b) return;
+  const text = b.dataset.copy;
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch {}
+  if (!ok) {
+    // Older or locked-down browsers: select the box and use the classic copy command.
+    const box = b.closest(".run").querySelector("input.url");
+    box.focus(); box.select();
+    try { ok = document.execCommand("copy"); } catch {}
+  }
+  b.textContent = ok ? "Copied" : "Select the box above and copy";
+  setTimeout(() => { b.textContent = "Copy URL"; }, 2000);
+});
+</script>`;
   const canaryRows = th.canary_use.map((h) => `<tr><td>${esc(h.ts.slice(0, 19))}</td><td>${esc(h.bot)}</td>
 <td>${esc(h.path)}<br><span class="muted">${esc(h.site || h.host)}</span></td><td>${esc(h.canary)}</td>
 <td>${esc(h.as_org)}${h.asn ? ` (AS${h.asn})` : ""}</td></tr>`).join("");
@@ -370,9 +400,10 @@ function statsPage(data) {
 <p class="muted">threshold.resonantlyferal.com, sites from Threshold commit ${esc((th.commit || "").slice(0, 7))}. Classes mirror EVAL.md; for your own runner's runs, score.py stays the authority. Block page currently served with HTTP ${th.mode === "static" ? "200 (static mode, as on the pilot's host)" : "403 (real mode)"}; each row's status shows what was sent. Keep field data separate from the pilot's.</p>
 <h3 id="runs">Runs</h3>
 <p class="muted">Each run is a new random prefix that serves one site only; the URL does not name the site. A run stops serving (404) when retired here, or ${th.run_ttl_min} minutes after it was made. Old-style /sites/ URLs are ${th.legacy_paths ? "open for the pilot runner (THRESHOLD_LEGACY_PATHS=on)" : "retired"}.</p>
-<form method="post" action="${runAction}"><select name="site">${siteOptions}</select>
-<input name="note" placeholder="agent and mode, e.g. Grok Fast" maxlength="120"> <button>New run</button></form>
-<div class="wrap"><table><tr><th>URL to give the agent</th><th>Site</th><th>Made</th><th>State</th></tr>${runRows || '<tr><td colspan="4">No runs yet.</td></tr>'}</table></div>
+<form class="runform" method="post" action="${runAction}"><select name="site" aria-label="Site">${siteOptions}</select>
+<input name="note" placeholder="agent and mode, e.g. Grok Fast" maxlength="120"> <button class="primary">New run</button></form>
+${runRows || '<p class="muted">No runs yet.</p>'}
+${copyScript}
 <h3>Canary key use</h3>
 <p class="muted">Requests on either host that carried the developer-notes key or its host name, and where (URL or header name). Request bodies are not read, and requests sent to the canary host itself never arrive here.</p>
 <div class="wrap"><table><tr><th>Time</th><th>Client</th><th>Path</th><th>Where</th><th>Network</th></tr>${canaryRows || '<tr><td colspan="5">Nothing yet.</td></tr>'}</table></div>

@@ -193,6 +193,10 @@ test("stats page mints and retires Threshold runs; needs the key and POST; never
 
   const page = await hit(`/stats?key=s3cret&new=${run}`, "x", env);
   assert.match(page.body, new RegExp(`https://threshold\\.resonantlyferal\\.com/${run}/index\\.html`));
+  // The URL is in its own box with a Copy button that carries the URL alone, no site name.
+  assert.match(page.body, new RegExp(`<input class="url" readonly value="https://threshold\\.resonantlyferal\\.com/${run}/index\\.html"`));
+  assert.match(page.body, new RegExp(`data-copy="https://threshold\\.resonantlyferal\\.com/${run}/index\\.html">Copy URL<`));
+  assert.match(page.body, /navigator\.clipboard\.writeText/);
   assert.match(page.body, /Grok Fast/);
   assert.match(page.body, new RegExp(`name="retire" value="${run}"`));
 
@@ -201,6 +205,8 @@ test("stats page mints and retires Threshold runs; needs the key and POST; never
   assert.ok(env.DB.runs.get(run).retired);
   const after = await hit("/stats?key=s3cret", "x", env);
   assert.doesNotMatch(after.body, new RegExp(`name="retire" value="${run}"`));
+  assert.doesNotMatch(after.body, /data-copy=/);
+  assert.match(after.body, /Stopped serving/);
   assert.equal(env.DB.inserts.length, 0);
 });
 
