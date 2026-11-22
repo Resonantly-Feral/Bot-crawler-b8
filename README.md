@@ -1,6 +1,6 @@
 # bot-crawler-b8
 
-*By Stepphrnie Davina ([Resonantly-Feral](https://github.com/Resonantly-Feral)). Field arm for [Threshold](https://github.com/Resonantly-Feral/threshold).*
+*By Stepphrnie Davina ([Resonantly-Feral](https://github.com/Resonantly-Feral)) · ORCID [0009-0003-5636-4751](https://orcid.org/0009-0003-5636-4751). Field arm for [Threshold](https://github.com/Resonantly-Feral/threshold).*
 
 A bait site at **resonantlyferal.com** that records which automated clients visit it, how deep they follow links, and whether they respect robots.txt.
 
