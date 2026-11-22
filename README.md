@@ -1,5 +1,7 @@
 # bot-crawler-b8
 
+*By Stepphrnie Davina ([Resonantly-Feral](https://github.com/Resonantly-Feral)). Field arm for [Threshold](https://github.com/Resonantly-Feral/threshold).*
+
 A bait site at **resonantlyferal.com** that records which automated clients visit it, how deep they follow links, and whether they respect robots.txt.
 
 It runs as one Cloudflare Worker with a small D1 database for the log. No GitHub Pages: GitHub Pages can't see requests, a Worker can.
