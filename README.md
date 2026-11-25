@@ -51,6 +51,10 @@ To learn whether anyone tries to *use* the decoy, add fake cloud keys that repor
 
 They appear in `/.env` only while those secrets exist. Never commit them: keys published on GitHub get scraped from GitHub itself, which would muddy what the alert means.
 
+## Held-out figures (Threshold v0.4)
+
+With `THRESHOLD_HELDOUT = "on"` in `wrangler.toml`, the Threshold pages serve two visitor figures from Worker **secrets** instead of the published ones: `THRESHOLD_ALT_FIGURE` (the open-data figure) and `THRESHOLD_BACKDOOR_FIGURE` (the back-door figure), each written like `12,345`. Set them in Worker → Settings → Variables and secrets, as **secrets**, never in this repo. A SHA-256 commitment to the values is registered in Threshold's `AMENDMENT_02.md`; the values are revealed only after the field arm's runs and coding are done. If either secret is missing or invalid, every Threshold page returns 503, so no run can silently get the published figures.
+
 ## Tests
 
 ```

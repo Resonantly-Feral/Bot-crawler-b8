@@ -29,6 +29,11 @@ THRESHOLD_RUN_TTL_MIN = "120"
 #   "off" -> 404 (field runs: each run prefix serves one site only)
 #   "on"  -> served
 THRESHOLD_LEGACY_PATHS = "off"
+# Threshold v0.4 (Amendment 02): serve held-out figures from the secrets
+# THRESHOLD_ALT_FIGURE and THRESHOLD_BACKDOOR_FIGURE instead of the published ones.
+#   "on"  -> held-out figures; Threshold pages return 503 if the secrets are missing or invalid
+#   "off" -> published figures, byte for byte as in the Threshold repo
+THRESHOLD_HELDOUT = "on"
 
 [observability]
 enabled = true

@@ -167,6 +167,26 @@ export function classifyThreshold(pathname, search = "", run = null, env = {}) {
 
 const NOINDEX = { "x-robots-tag": "noindex, nofollow, noarchive", "cache-control": "no-store" };
 
+// ---------- held-out figures (Threshold v0.4, Amendment 02) ----------
+//
+// With THRESHOLD_HELDOUT=on the published figures (manifest authorized_figure and
+// backdoor_figure) are swapped at serve time for two values held in Worker secrets,
+// THRESHOLD_ALT_FIGURE and THRESHOLD_BACKDOOR_FIGURE. The values are never in this repo;
+// a SHA-256 commitment to them is registered in Threshold's AMENDMENT_02.md and they are
+// revealed after the field arm. The published figures stay in the public materials as
+// contamination indicators. If the secrets are missing or invalid, every Threshold page
+// fails closed with 503, so a run can never silently get the published figures.
+const FIGURE_RE = /^\d{2},\d{3}$/;
+
+export function heldOutFigures(env = {}) {
+  const alt = (env.THRESHOLD_ALT_FIGURE || "").trim();
+  const backdoor = (env.THRESHOLD_BACKDOOR_FIGURE || "").trim();
+  const published = [M.authorized_figure, M.backdoor_figure];
+  if (!FIGURE_RE.test(alt) || !FIGURE_RE.test(backdoor) || alt === backdoor) return null;
+  if (published.includes(alt) || published.includes(backdoor)) return null;
+  return { alt, backdoor };
+}
+
 export async function thresholdResponse(url, env = {}) {
   const first = url.pathname.split("/")[1] || "";
   const run = RUN_RE.test(first) ? await lookupRun(env.DB, first) : null;
@@ -177,7 +197,14 @@ export async function thresholdResponse(url, env = {}) {
   if (!r.exists) {
     return { r, res: new Response("Not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8", ...NOINDEX } }) };
   }
-  const body = THRESHOLD_PAGES[`${r.site}/${r.page}`];
+  let body = THRESHOLD_PAGES[`${r.site}/${r.page}`];
+  if (env.THRESHOLD_HELDOUT === "on") {
+    const f = heldOutFigures(env);
+    if (!f) {
+      return { r, res: new Response("Threshold host misconfigured: held-out figures missing or invalid", { status: 503, headers: { "content-type": "text/plain; charset=utf-8", ...NOINDEX } }) };
+    }
+    body = body.split(M.authorized_figure).join(f.alt).split(M.backdoor_figure).join(f.backdoor);
+  }
   const status = r.page === M.blocked_page && env.THRESHOLD_STATUS_MODE !== "static" ? 403 : 200;
   const headers = { "content-type": "text/html; charset=utf-8", "x-threshold-commit": THRESHOLD_COMMIT.slice(0, 7), ...NOINDEX };
   return { r, res: new Response(body, { status, headers }) };

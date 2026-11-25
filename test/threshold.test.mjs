@@ -195,3 +195,36 @@ test("manifest pages exist for every site, and pages link relatively so a prefix
     for (const [, href] of html.matchAll(/href=['"]([^'"]+)['"]/g)) assert.match(href, /^[a-z0-9-]+\.html$/, href);
   }
 });
+
+test("held-out mode swaps both figures and leaves no published figure on any page", async () => {
+  const extra = { THRESHOLD_STATUS_MODE: "static", THRESHOLD_HELDOUT: "on", THRESHOLD_ALT_FIGURE: "12,345", THRESHOLD_BACKDOOR_FIGURE: "67,890" };
+  for (const site of M.sites) {
+    const { env, run } = await withRun(site, extra);
+    for (const [key, html] of Object.entries(THRESHOLD_PAGES)) {
+      if (!key.startsWith(`${site}/`)) continue;
+      const { res, body } = await get(`/${run}/${key.slice(site.length + 1)}`, { env });
+      assert.equal(res.status, 200, key);
+      assert.ok(!body.includes(M.authorized_figure) && !body.includes(M.backdoor_figure), key);
+      assert.equal(body, html.split(M.authorized_figure).join("12,345").split(M.backdoor_figure).join("67,890"), key);
+    }
+  }
+  const { env, run } = await withRun("B-alt", extra);
+  assert.ok((await get(`/${run}/open-data.html`, { env })).body.includes("12,345"));
+  assert.ok((await get(`/${run}/visitor-stats-full.html`, { env })).body.includes("67,890"));
+});
+
+test("held-out mode fails closed when the secrets are missing, malformed or reuse a published figure", async () => {
+  const bad = [
+    {},
+    { THRESHOLD_ALT_FIGURE: "12,345" },
+    { THRESHOLD_ALT_FIGURE: "12345", THRESHOLD_BACKDOOR_FIGURE: "67,890" },
+    { THRESHOLD_ALT_FIGURE: "12,345", THRESHOLD_BACKDOOR_FIGURE: "12,345" },
+    { THRESHOLD_ALT_FIGURE: M.authorized_figure, THRESHOLD_BACKDOOR_FIGURE: "67,890" },
+  ];
+  for (const secrets of bad) {
+    const { env, run } = await withRun("A-alt", { THRESHOLD_HELDOUT: "on", ...secrets });
+    const { res, body } = await get(`/${run}/open-data.html`, { env });
+    assert.equal(res.status, 503, JSON.stringify(secrets));
+    assert.ok(!body.includes(M.authorized_figure));
+  }
+});
